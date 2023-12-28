@@ -5,14 +5,18 @@ import "encoding/binary"
 func Load(p *Pointer, buf []byte) {
 	length := len(buf)
 
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := p.LoadU64(Ptr(uint64(i)))
-			binary.LittleEndian.PutUint64(buf[i:i+8], x)
-			i += 7
-			continue
-		}
-		buf[i] = p.LoadU8(uint8(i))
+	chunkCount := length >> 3
+
+	for chunkIdx := 0; chunkIdx < chunkCount; chunkIdx++ {
+		i := chunkIdx << 3
+
+		binary.LittleEndian.PutUint64(buf[i:i+8], p.LoadU64(Ptr(uint64(i))))
+	}
+
+	remainder := length & 7
+	remainderOffset := chunkCount << 3
+	for index := remainderOffset; index < (remainder + remainderOffset); index++ {
+		buf[index] = byte(p.LoadU64(Ptr(uint64(index))))
 	}
 }
 
@@ -20,14 +24,18 @@ func LoadInput() []byte {
 	length := int(InputLength())
 	buf := make([]byte, length)
 
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := Ptr(uint64(i)).InputLoadU64()
-			binary.LittleEndian.PutUint64(buf[i:i+8], x)
-			i += 7
-			continue
-		}
-		buf[i] = Ptr(uint64(i)).InputLoadU8()
+	chunkCount := length >> 3
+
+	for chunkIdx := 0; chunkIdx < chunkCount; chunkIdx++ {
+		i := chunkIdx << 3
+
+		binary.LittleEndian.PutUint64(buf[i:i+8], Ptr(uint64(i)).InputLoadU64())
+	}
+
+	remainder := length & 7
+	remainderOffset := chunkCount << 3
+	for index := remainderOffset; index < (remainder + remainderOffset); index++ {
+		buf[index] = Ptr(uint64(index)).InputLoadU8()
 	}
 
 	return buf
@@ -36,16 +44,19 @@ func LoadInput() []byte {
 func Store(p *Pointer, buf []byte) {
 	length := len(buf)
 
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := binary.LittleEndian.Uint64(buf[i : i+8])
+	chunkCount := length >> 3
 
-			p.AddPtr(Ptr(uint64(i))).StoreU64(x)
-			i += 7
-			continue
-		}
+	for chunkIdx := 0; chunkIdx < chunkCount; chunkIdx++ {
+		i := chunkIdx << 3
+		x := binary.LittleEndian.Uint64(buf[i : i+8])
 
-		p.AddPtr(Ptr(uint64(i))).StoreU8(buf[i])
+		p.AddPtr(Ptr(uint64(i))).StoreU64(x)
+	}
+
+	remainder := length & 7
+	remainderOffset := chunkCount << 3
+	for index := remainderOffset; index < (remainder + remainderOffset); index++ {
+		p.AddPtr(Ptr(uint64(index))).StoreU64(uint64(buf[index]))
 	}
 }
 
