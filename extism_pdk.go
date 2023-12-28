@@ -1,14 +1,12 @@
 package pdk
 
 import (
-	"encoding/binary"
-	"encoding/json"
-	"strings"
+	"github.com/extism/go-pdk/internal"
+	"github.com/extism/go-pdk/memory"
 )
 
-type Memory struct {
-	offset extismPointer
-	length uint64
+type Pointer struct {
+	ptr *internal.Pointer
 }
 
 type LogLevel int
@@ -20,129 +18,86 @@ const (
 	LogError
 )
 
-func load(offset extismPointer, buf []byte) {
-	length := len(buf)
-
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := extism_load_u64(offset + extismPointer(i))
-			binary.LittleEndian.PutUint64(buf[i:i+8], x)
-			i += 7
-			continue
-		}
-		buf[i] = extism_load_u8(offset + extismPointer(i))
-	}
-}
-
-func loadInput() []byte {
-	length := int(extism_input_length())
-	buf := make([]byte, length)
-
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := extism_input_load_u64(extismPointer(i))
-			binary.LittleEndian.PutUint64(buf[i:i+8], x)
-			i += 7
-			continue
-		}
-		buf[i] = extism_input_load_u8(extismPointer(i))
-	}
-
-	return buf
-}
-
-func store(offset extismPointer, buf []byte) {
-	length := len(buf)
-
-	for i := 0; i < length; i++ {
-		if length-i >= 8 {
-			x := binary.LittleEndian.Uint64(buf[i : i+8])
-			extism_store_u64(offset+extismPointer(i), x)
-			i += 7
-			continue
-		}
-
-		extism_store_u8(offset+extismPointer(i), buf[i])
-	}
-}
-
-func Input() []byte {
-	return loadInput()
-}
-
-func Allocate(length int) Memory {
-	clength := uint64(length)
-	offset := extism_alloc(clength)
-
-	return Memory{
-		offset: offset,
-		length: clength,
-	}
-}
-
-func AllocateBytes(data []byte) Memory {
-	clength := uint64(len(data))
-	offset := extism_alloc(clength)
-
-	store(offset, data)
-
-	return Memory{
-		offset: offset,
-		length: clength,
-	}
-
-}
-
-func AllocateString(data string) Memory {
-	return AllocateBytes([]byte(data))
-}
-
 func InputString() string {
 	return string(Input())
 }
 
-func OutputMemory(mem Memory) {
-	extism_output_set(mem.offset, mem.length)
+func Input() []byte {
+	return internal.LoadInput()
 }
 
 func Output(data []byte) {
 	clength := uint64(len(data))
-	offset := extism_alloc(clength)
+	offset := internal.Alloc(clength)
 
-	store(offset, data)
-	extism_output_set(offset, clength)
+	internal.Store(offset, data)
+
+	offset.OutputSet(clength)
 }
 
 func OutputString(s string) {
 	Output([]byte(s))
 }
 
+func Allocate(length int) *memory.Memory {
+	clength := uint64(length)
+	offset := internal.Alloc(clength)
+
+	return &memory.Memory{
+		Off: offset,
+		Len: clength,
+	}
+}
+
+func AllocateBytes(data []byte) *memory.Memory {
+	offset, clength := internal.AllocBytes(data)
+
+	return &memory.Memory{
+		Off: offset,
+		Len: clength,
+	}
+
+}
+
+func AllocateString(data string) *memory.Memory {
+	return AllocateBytes([]byte(data))
+}
+
 func GetConfig(key string) (string, bool) {
 	mem := AllocateBytes([]byte(key))
 	defer mem.Free()
 
-	offset := extism_config_get(mem.offset)
-	clength := extism_length(offset)
-	if offset == 0 || clength == 0 {
+	offset := mem.Off
+	if offset == nil {
+		return "", false
+	}
+
+	config := offset.ConfigGet()
+	if config == nil {
+		return "", false
+	}
+
+	clength := config.Length()
+	if clength == 0 {
 		return "", false
 	}
 
 	value := make([]byte, clength)
-	load(offset, value)
+	internal.Load(config, value)
 
 	return string(value), true
 }
 
-func LogMemory(level LogLevel, memory Memory) {
+func LogPDKMemory(level LogLevel, m *memory.Memory) {
 	switch level {
 	case LogInfo:
-		extism_log_info(memory.offset)
+		m.Off.LogInfo()
 	case LogDebug:
-		extism_log_debug(memory.offset)
+		m.Off.LogDebug()
 	case LogWarn:
-		extism_log_warn(memory.offset)
+		m.Off.LogWarn()
 	case LogError:
-		extism_log_error(memory.offset)
+		m.Off.LogError()
 	}
 }
 
@@ -150,20 +105,29 @@ func Log(level LogLevel, s string) {
 	mem := AllocateString(s)
 	defer mem.Free()
 
-	LogMemory(level, mem)
+	LogPDKMemory(level, mem)
 }
 
 func GetVar(key string) []byte {
 	mem := AllocateBytes([]byte(key))
 
-	offset := extism_var_get(mem.offset)
-	clength := extism_length(offset)
-	if offset == 0 || clength == 0 {
+	offset := mem.Off
+	if offset == nil {
+		return nil
+	}
+
+	v := offset.VarGet()
+	if v == nil {
+		return nil
+	}
+
+	clength := mem.Off.Length()
+	if clength == 0 {
 		return nil
 	}
 
 	value := make([]byte, clength)
-	load(offset, value)
+	internal.Load(v, value)
 
 	return value
 }
@@ -175,107 +139,10 @@ func SetVar(key string, value []byte) {
 	valMem := AllocateBytes(value)
 	defer valMem.Free()
 
-	extism_var_set(keyMem.offset, valMem.offset)
+	keyMem.Off.VarSet(valMem.Off)
 }
 
 func RemoveVar(key string) {
 	mem := AllocateBytes([]byte(key))
-	extism_var_set(mem.offset, 0)
-}
-
-type HTTPRequestMeta struct {
-	Url     string            `json:"url"`
-	Method  string            `json:"method"`
-	Headers map[string]string `json:"headers"`
-}
-
-type HTTPRequest struct {
-	meta HTTPRequestMeta
-	body []byte
-}
-
-type HTTPResponse struct {
-	memory Memory
-	status uint16
-}
-
-func (r HTTPResponse) Memory() Memory {
-	return r.memory
-}
-
-func (r HTTPResponse) Body() []byte {
-	buf := make([]byte, r.memory.length)
-	r.memory.Load(buf)
-	return buf
-}
-
-func (r HTTPResponse) Status() uint16 {
-	return r.status
-}
-
-func NewHTTPRequest(method string, url string) *HTTPRequest {
-	return &HTTPRequest{
-		meta: HTTPRequestMeta{
-			Url:    url,
-			Method: strings.ToUpper(method),
-		},
-		body: nil}
-}
-
-func (r *HTTPRequest) SetHeader(key string, value string) *HTTPRequest {
-	if r.meta.Headers == nil {
-		r.meta.Headers = make(map[string]string)
-	}
-	r.meta.Headers[key] = value
-	return r
-}
-
-func (r *HTTPRequest) SetBody(body []byte) *HTTPRequest {
-	r.body = body
-	return r
-}
-
-func (r *HTTPRequest) Send() HTTPResponse {
-	enc, _ := json.Marshal(r.meta)
-
-	req := AllocateBytes(enc)
-	defer req.Free()
-	data := AllocateBytes(r.body)
-	defer data.Free()
-
-	offset := extism_http_request(req.offset, data.offset)
-	length := extism_length(offset)
-	status := uint16(extism_http_status_code())
-
-	memory := Memory{offset, length}
-
-	return HTTPResponse{
-		memory,
-		status,
-	}
-}
-
-func (m *Memory) Load(buffer []byte) {
-	load(m.offset, buffer)
-}
-
-func (m *Memory) Store(data []byte) {
-	store(m.offset, data)
-}
-
-func (m *Memory) Free() {
-	extism_free(m.offset)
-}
-
-func (m *Memory) Length() uint64 {
-	return m.length
-}
-
-func (m *Memory) Offset() uint64 {
-	return uint64(m.offset)
-}
-
-func FindMemory(offset uint64) Memory {
-	length := extism_length(extismPointer(offset))
-	return Memory{extismPointer(offset), length}
+	mem.Off.VarSet(nil)
 }

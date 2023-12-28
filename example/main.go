@@ -34,7 +34,7 @@ func count_vowels() int32 {
 	mem := pdk.AllocateString(output)
 
 	// zero-copy output to host
-	pdk.OutputMemory(mem)
+	mem.Output()
 
 	return 0
 }
